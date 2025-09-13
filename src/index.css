@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { color-scheme: light dark; }
+
+/* === Hero shimmer effect === */
+@keyframes shimmerWave {
+  0%   { transform: translateX(-120%); }
+  50%  { transform: translateX(120%); }
+  100% { transform: translateX(-120%); }
+}
+
+/* === Hero shimmer & sparkles === */
+@keyframes shimmerSweep {
+  0% { transform: translateX(-140%) skewX(-20deg); opacity: 0; }
+  20% { opacity: .5; }
+  50% { opacity: .85; }
+  80% { opacity: .5; }
+  100% { transform: translateX(140%) skewX(-20deg); opacity: 0; }
+}
+ .hero-shimmer {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: linear-gradient(
+    120deg,
+    rgba(255,255,255,0) 0%,
+    rgba(255,255,255,0.12) 50%,
+    rgba(255,255,255,0) 100%
+  );
+  animation: shimmerWave 8s linear infinite;
+  filter: blur(20px);
+  mix-blend-mode: screen;
+  pointer-events: none;
+  z-index: 2;
+}
+
+@keyframes shimmerWave {
+  0%   { transform: translateX(-150%); opacity: 0; }
+  20%  { opacity: 0.8; }
+  50%  { transform: translateX(150%); opacity: 1; }
+  80%  { opacity: 0.8; }
+  100% { transform: translateX(-150%); opacity: 0; }
+}
+
+@keyframes sparkleFloat {
+  0% { transform: translateY(10%) scale(.9); opacity: 0; }
+  40% { opacity: .6; }
+  100% { transform: translateY(-25%) scale(1.15); opacity: 0; }
+}
+.hero-sparkles {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(255,255,255,.8) 1.25px, transparent 1.25px);
+  background-size: 90px 90px;
+  animation: sparkleFloat 8s linear infinite;
+  mix-blend-mode: screen;
+  pointer-events: none;
+  z-index: 3;
+}
+
+/* === 3D tilt card === */
+.tilt-3d { perspective: 900px; }
+.tilt-inner {
+  will-change: transform;
+  transform: perspective(900px) rotateX(0deg) rotateY(0deg) scale(1);
+  transition: transform 200ms ease;
+  transform-style: preserve-3d;
+}
+.tilt-glare {
+  position: absolute; inset: 0;
+  border-radius: 1rem; /* match rounded-2xl */
+  opacity: 0; transition: opacity 250ms ease;
+  mix-blend-mode: screen;
+}
+
+/* Tiny 3D tilt */
+.tilt-3d { perspective: 800px; }
+.tilt-inner {
+  transition: transform 300ms ease;
+  transform-style: preserve-3d;
+}
+.tilt-glare {
+  position: absolute;
+  inset: 0;
+  border-radius: 1rem;
+  pointer-events: none;
+  opacity: 0.1;
+}
