@@ -14,6 +14,7 @@ export default function Landing() {
   );
 }
 
+// landing page hero section
 function Hero() {
   return (
     <section className="relative">
