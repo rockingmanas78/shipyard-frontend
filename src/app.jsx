@@ -26,10 +26,24 @@ export default function App() {
           path="/summary"
           element={
             <Protected>
-              <Summary />
+              <Summary model={"openai"}/>
             </Protected>
           }
-        />
+        /><Route
+          path="/summary/gemini"
+          element={
+              <Protected>
+                  <Summary model={"gemini"}/>
+              </Protected>
+          }
+      /><Route
+          path="/summary/claude"
+          element={
+              <Protected>
+                  <Summary model={"claude"}/>
+              </Protected>
+          }
+      />
       </Route>
 
       {/* catch-all */}

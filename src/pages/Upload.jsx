@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import JSZip from "jszip";
 import api from "../api";
-import Header from "../components/header";
 
 const ts = () => new Date().toLocaleTimeString([], { hour12: false });
 
@@ -321,6 +320,8 @@ export default function Upload() {
 
       // persist & go
       localStorage.setItem("iship_results", JSON.stringify(data));
+      console.log("Data from backend")
+      console.log(JSON.stringify(data))
       setStage("done");
       setBusy(false);
       nav("/summary");
@@ -389,7 +390,6 @@ export default function Upload() {
   return (
     <section className="min-h-[calc(100vh-5rem)] bg-gradient-to-b from-white via-[#eef5fb] to-[#eef5fb] py-10">
       <div className="max-w-7xl mx-auto px-4 lg:px-6 grid lg:grid-cols-[380px,1fr] gap-6">
-         <Header />
         {/* LEFT: Guidelines + stage stepper */}
         <aside className="space-y-6">
           <StagePanel

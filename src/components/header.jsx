@@ -15,7 +15,7 @@ export default function Header() {
   }, []);
 
   return (
-    <div className="fixed top-4 inset-x-0 z-50 pointer-events-none">
+    <div className="w-full py-4">
       <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 pointer-events-auto">
         <header
           className={[

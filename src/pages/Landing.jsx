@@ -1,11 +1,9 @@
 // src/pages/Landing.jsx
-import Header from "../components/header";
 import { useRef } from "react";
 
 export default function Landing() {
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white text-slate-800">
-      <Header />
       <Hero />
       <CTA />
       <FAQ />
@@ -14,7 +12,6 @@ export default function Landing() {
   );
 }
 
-// landing page hero section
 function Hero() {
   return (
     <section className="relative">
