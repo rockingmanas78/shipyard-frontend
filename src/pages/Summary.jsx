@@ -885,7 +885,7 @@ export default function Summary({model}) {
                             >
                                 Open AI
                             </button>
-                            <button
+                            {/* <button
                                 onClick={() => {
                                     nav("/summary/gemini")
                                     nav(0)
@@ -904,7 +904,7 @@ export default function Summary({model}) {
                                 title="Claude Inspection Report"
                             >
                                 Claude
-                            </button>
+                            </button> */}
                             <button
                                 onClick={onPrint}
                                 className="px-4 py-2 rounded-lg border text-gray-700 hover:bg-gray-50"

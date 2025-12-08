@@ -103,7 +103,7 @@ export default function Upload() {
   const tickerRef = useRef(null);
 
   // Simple ETA rule: 12s per photo
-  const PER_PHOTO_SEC = 12;               // simple ETA: 12s per photo
+  const PER_PHOTO_SEC = 50;               // simple ETA: 12s per photo
   const totalEstSecRef = useRef(0);       // total estimate in seconds
 
   // per-file status (queued|uploading|analyzing|done)
