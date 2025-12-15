@@ -87,3 +87,55 @@
   pointer-events: none;
   opacity: 0.1;
 }
+
+
+/* =========================
+   PRINT (A4 PDF EXPORT)
+   ========================= */
+
+@page {
+  size: A4;
+  margin: 18mm 14mm;
+}
+
+@media print {
+  html, body {
+    background: #fff !important;
+    color: #111 !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* hide all UI-only items */
+  .no-print, .print-hide {
+    display: none !important;
+  }
+
+  /* show print-only blocks */
+  .print-only {
+    display: block !important;
+  }
+
+  /* avoid awkward splits */
+  h1, h2, h3, h4, p, table, tr, td, th, img, .print-section {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* force page breaks when needed */
+  .print-page {
+    break-after: page;
+    page-break-after: always;
+  }
+
+  /* make sure shadows/backgrounds don’t go weird */
+  * {
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+}
+
+/* default: hide print-only on screen */
+.print-only {
+  display: none;
+}
