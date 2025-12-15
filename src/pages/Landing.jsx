@@ -1,4 +1,4 @@
-// src/pages/Landing.jsx
+//src/pages/Landing.jsx
 import { useRef } from "react";
 
 export default function Landing() {
