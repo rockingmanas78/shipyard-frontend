@@ -4,6 +4,7 @@ import Landing from "./pages/Landing.jsx";
 import Upload from "./pages/Upload.jsx";
 import Summary from "./pages/Summary.jsx";
 import Layout from "./components/Layout.jsx";
+import SummaryV2 from "./pages/SummaryV2.jsx";
 
 // Auth is disabled; this wrapper is just a pass-through
 function Protected({ children }) { return children; }
@@ -26,7 +27,7 @@ export default function App() {
           path="/summary"
           element={
             <Protected>
-              <Summary model={"openai"}/>
+              <SummaryV2 model={"openai"} />
             </Protected>
           }
         /><Route

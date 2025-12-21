@@ -156,6 +156,55 @@ const Tag = ({ value }) => {
       : "bg-emerald-50 text-emerald-800 border-emerald-200";
   return <span className={`text-xs px-2 py-1 rounded-full border ${color}`}>{labelMap[value] || value}</span>;
 };
+  // Compute an "effective" condition for UI/PDF consistency.
+  // - Keeps your response contract unchanged (still reads it.condition)
+  // - Adds resilience when backend maps unsupported hazards to "none"
+  // - Handles: rust tag, high severity without recs, recs stored in `recommendations`
+  const getNormalizedCondition = (item) =>
+    ((item?.condition ?? item?.condition_type ?? "none") + "").toString();
+
+  const getNormalizedComment = (item) =>
+    ((item?.comment ?? item?.comments ?? "") + "").toString();
+
+  const getNormalizedRecommendationsArray = (item) => {
+    // Prefer your existing field; fallback to OpenAI native `recommendations`
+    if (Array.isArray(item?.recommendations_high_severity_only)) return item.recommendations_high_severity_only;
+    if (Array.isArray(item?.recommendations)) return item.recommendations;
+    // If something stored as a string (user edits), split it safely
+    if (typeof item?.recommendations_high_severity_only === "string") {
+      return item.recommendations_high_severity_only
+        .split(";")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+    return [];
+  };
+
+  const resolveEffectiveCondition = (perImageItem) => {
+    const rawCondition = getNormalizedCondition(perImageItem);
+    if (rawCondition !== "none") return rawCondition;
+
+    const tagsObject = perImageItem?.tags || {};
+    const hasRustStainsTag = Boolean(tagsObject?.rust_stains);
+
+    const recommendationsHighSeverityOnly = Array.isArray(perImageItem?.recommendations_high_severity_only)
+      ? perImageItem.recommendations_high_severity_only : [];
+    const hasHighSeverityRecommendations = recommendationsHighSeverityOnly.length > 0;
+
+    // Some backends store recs in `recommendations` (OpenAI native) instead of `_high_severity_only`
+    const fallbackRecommendations = Array.isArray(perImageItem?.recommendations) ? perImageItem.recommendations : [];
+    const hasAnyRecommendations = fallbackRecommendations.length > 0;
+
+    // Optional fields (won't break if missing)
+    const severityLevel = (perImageItem?.severity_level || "").toString().toLowerCase();
+    const priorityLevel = (perImageItem?.priority || "").toString().toLowerCase();
+    const isHighOrExtremeSeverity = severityLevel === "high" || severityLevel === "extreme";
+    const isImmediateOrCriticalPriority = priorityLevel === "immediate action required" || priorityLevel === "critical";
+
+    if (hasRustStainsTag) return "rust";
+    if (hasHighSeverityRecommendations || hasAnyRecommendations || isHighOrExtremeSeverity || isImmediateOrCriticalPriority) return "attention";
+    return "none";
+  };
 
 const conditionLabel = (value) => {
   const map = {
@@ -173,9 +222,15 @@ export default function Summary({ model = "openai" }) {
   const imgURL = (id) => `${api.defaults.baseURL}/uploads/${encodeURIComponent(id)}`;
 
   // ---- load localStorage safely
-  const stored = safeJSONParse(localStorage.getItem("iship_results") || "{}", {});
-  const modelBucket = stored?.results?.[model] || {};
-  const results = modelBucket && typeof modelBucket === "object" ? modelBucket : {};
+  const [storageVersion, setStorageVersion] = useState(0);
+  // const stored = safeJSONParse(localStorage.getItem("iship_results") || "{}", {});
+  // const modelBucket = stored?.results?.[model] || {};
+  // const results = modelBucket && typeof modelBucket === "object" ? modelBucket : {};
+   const results = useMemo(() => {
+     const stored = safeJSONParse(localStorage.getItem("iship_results") || "{}", {});
+     const modelBucket = stored?.results?.[model] || {};
+     return modelBucket && typeof modelBucket === "object" ? modelBucket : {};
+   }, [model, storageVersion]);
 
   const perImage = Array.isArray(results?.per_image) ? results.per_image : [];
   const counts = results?.batch_summary || { fire_hazard_count: 0, trip_fall_count: 0, none_count: 0 };
@@ -230,17 +285,34 @@ export default function Summary({ model = "openai" }) {
       const condition =
         it.condition === "none" && rust ? "rust" : it.condition === "none" && hasRecs ? "attention" : it.condition || "none";
 
-      const text = [it.id, it.location, it.comment].filter(Boolean).join(" ").toLowerCase();
-      return {
+      // const text = [it.id, it.location, it.comment].filter(Boolean).join(" ").toLowerCase();
+      // return {
+      //   raw: it,
+      //   index: i + 1,
+      //   id: it.id,
+      //   location: it.location || "",
+      //   condition,
+      //   text,
+      // };
+      const text = [it.id, it.location, getNormalizedComment(it)].filter(Boolean).join(" ").toLowerCase();
+       return {
         raw: it,
         index: i + 1,
+        sourceIndex: i, // IMPORTANT: original index in perImage for persistence
         id: it.id,
         location: it.location || "",
-        condition,
+        condition: resolveEffectiveCondition(it),
         text,
       };
     });
   }, [perImage]);
+
+  const getRowRecommendationsText = (row) => {
+    if (!row) return "";
+    if (row.manual) return (row.combined || "").toString();
+    return (row.recommendations || "").toString();
+  };
+
 
   const obsFilteredSorted = useMemo(() => {
     let list = obsRows;
@@ -280,7 +352,7 @@ export default function Summary({ model = "openai" }) {
     }
     list[rowIndex] = next;
     copy.results[model].per_image = list;
-    localStorage.setItem("iship_results", JSON.stringify(copy));
+    setStorageVersion((v) => v + 1);
   };
 
   // ---- defects (manual + overrides)
@@ -307,24 +379,31 @@ export default function Summary({ model = "openai" }) {
   const hazardRowsDerived = useMemo(() => {
     const derived = perImage
       .map((it, i) => {
-        const hasRecs = (it.recommendations_high_severity_only || []).length > 0;
+        // const hasRecs = (it.recommendations_high_severity_only || []).length > 0;
         const rust = !!it.tags?.rust_stains;
-        const effectiveCondition =
-          it.condition === "none" && rust ? "rust" : it.condition === "none" && hasRecs ? "attention" : it.condition;
+        //const effectiveCondition = it.condition === "none" && rust ? "rust" : it.condition === "none" && hasRecs ? "attention" : it.condition;
+        const effectiveCondition = resolveEffectiveCondition(it);
 
+        // if (effectiveCondition === "none" && !hasRecs) return null;
+        // if (effectiveCondition === "none") return null;
+        // const effectiveCondition = resolveEffectiveCondition(it);
+        const recsArray = getNormalizedRecommendationsArray(it);
+        const hasRecs = recsArray.length > 0;
         if (effectiveCondition === "none" && !hasRecs) return null;
+        const recs = recsArray.join("; ") || "";
 
         const overrides = getDefect(it.id);
         if (overrides?.hidden) return null;
 
-        const recs = (it.recommendations_high_severity_only || []).join("; ") || "";
+        // const recs = (it.recommendations_high_severity_only || []).join("; ") || "";
         return {
           id: it.id,
           photoId: it.id,
           index: i + 1,
           area: it.location || "—",
           condition: effectiveCondition,
-          comment: it.comment || "",
+          // comment: it.comment || "",
+          comment: getNormalizedComment(it),
           recommendations: recs,
           assignedTo: "",
           deadline: "",
@@ -412,10 +491,13 @@ export default function Summary({ model = "openai" }) {
     const hazards = perImage.map((it) => ({
       id: it.id,
       location: it.location || "",
-      condition: it.condition,
+      // condition: it.condition,
+      condition: resolveEffectiveCondition(it),
       tags: it.tags || {},
-      comment: it.comment || "",
-      recs: (it.recommendations_high_severity_only || []).join("; "),
+      // comment: it.comment || "",
+      // recs: (it.recommendations_high_severity_only || []).join("; "),
+      comment: getNormalizedComment(it),
+      recs: getNormalizedRecommendationsArray(it).join("; "),
     }));
     return {
       meta: {
@@ -889,13 +971,7 @@ export default function Summary({ model = "openai" }) {
             <div className="text-gray-500">No observations match the filters.</div>
           ) : obsView === "grid" ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              {obsFilteredSorted.map(({ raw, index }, idx) => {
-                const effectiveCond =
-                  raw.condition === "none" && !!raw.tags?.rust_stains
-                    ? "rust"
-                    : raw.condition === "none" && (raw.recommendations_high_severity_only || []).length
-                    ? "attention"
-                    : raw.condition;
+              {obsFilteredSorted.map(({ raw, index, sourceIndex }, idx) => {
 
                 return (
                   <div key={raw.id} className="rounded-xl border bg-white shadow-sm overflow-hidden">
@@ -917,7 +993,7 @@ export default function Summary({ model = "openai" }) {
                         />
                       </button>
                       <div className="absolute top-3 left-3">
-                        <Tag value={effectiveCond} />
+                        <Tag value={obsFilteredSorted[idx]?.condition} />
                       </div>
                     </div>
 
@@ -926,12 +1002,22 @@ export default function Summary({ model = "openai" }) {
                         {raw.location ? `Location: ${raw.location}` : `Observation #${index}`}
                       </div>
 
+                       <div>
+                         <div className="text-xs font-medium text-gray-600 mb-1">Location</div>
+                         <input
+                           className="w-full border rounded-lg p-2 bg-white text-gray-900"
+                           defaultValue={raw.location || ""}
+                           placeholder="e.g., Engine Room / Main Deck / Bow"
+                           onBlur={(e) => persistRow(sourceIndex, { location: e.target.value })}
+                         />
+                       </div>
+
                       <div>
                         <div className="text-xs font-medium text-gray-600 mb-1">Comment</div>
                         <textarea
                           className="w-full border rounded-lg p-2 bg-white text-gray-900 min-h-[84px]"
                           defaultValue={raw.comment || ""}
-                          onBlur={(e) => persistRow(idx, { comment: e.target.value })}
+                          onBlur={(e) => persistRow(obsFilteredSorted[idx]?.sourceIndex, { comment: e.target.value })}
                         />
                       </div>
 
@@ -939,11 +1025,11 @@ export default function Summary({ model = "openai" }) {
                         <div className="text-xs font-medium text-gray-600 mb-1">
                           Recommendations <span className="text-gray-400">(use ; between items)</span>
                         </div>
-                        {(raw.recommendations_high_severity_only || []).length > 0 ? (
+                        {getNormalizedRecommendationsArray(raw).length > 0 ? (
                           <textarea
                             className="w-full border rounded-lg p-2 bg-white text-gray-900 min-h-[84px]"
-                            defaultValue={(raw.recommendations_high_severity_only || []).join("; ")}
-                            onBlur={(e) => persistRow(idx, { recommendations_high_severity_only: e.target.value })}
+                            defaultValue={getNormalizedRecommendationsArray(raw).join("; ")}
+                            onBlur={(e) => persistRow(obsFilteredSorted[idx]?.sourceIndex, { recommendations_high_severity_only: e.target.value })}
                           />
                         ) : (
                           <div className="text-xs text-gray-400">—</div>
@@ -1029,131 +1115,120 @@ export default function Summary({ model = "openai" }) {
         />
 
         <div className="p-4">
-          <div className="rounded-lg border overflow-hidden">
-            <table className="w-full text-xs table-fixed">
-              <thead className="bg-gray-50 text-gray-600 border-b">
-                <tr>
-                  <th className="text-left font-medium px-2 py-2 w-8">#</th>
-                  <th className="text-left font-medium px-2 py-2 w-32">Area</th>
-                  <th className="text-left font-medium px-2 py-2 w-24">Photo</th>
-                  <th className="text-left font-medium px-2 py-2 w-28">Condition</th>
-                  <th className="text-left font-medium px-2 py-2 w-32">Assigned</th>
-                  <th className="text-left font-medium px-2 py-2 w-32">Deadline</th>
-                  <th className="text-left font-medium px-2 py-2">Recommendations</th>
-                  <th className="text-left font-medium px-2 py-2 w-10"> </th>
-                </tr>
-              </thead>
-              <tbody>
-                {hazardRowsDerived.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="px-3 py-6 text-center text-gray-500">
-                      No defects / non-conformities.
-                    </td>
-                  </tr>
+              {hazardRowsDerived.length === 0 ? (
+    <div className="px-3 py-6 text-center text-gray-500 border rounded-lg bg-white">
+      No defects / non-conformities.
+    </div>
+  ) : (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+      {hazardRowsDerived.map((row, i) => {
+        const photoId = row.photoId || row.id;
+        const photo = photoId ? perImage.find((x) => x.id === photoId) : null;
+        return (
+          <div key={row.id} className="rounded-xl border bg-white shadow-sm overflow-hidden">
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => photo && setSelectedPhoto(photo)}
+                className="block w-full focus:outline-none focus:ring-2 focus:ring-blue-500"
+                title="Click to enlarge"
+              >
+                <img
+                  src={photoId ? imgURL(photoId) : "/placeholder.png"}
+                  alt={photoId || `defect-${i + 1}`}
+                  className="w-full h-auto max-h-[70vh] object-contain bg-gray-50"
+                  onError={(e) => {
+                    e.currentTarget.src = "/placeholder.png";
+                    e.currentTarget.onerror = null;
+                  }}
+                />
+              </button>
+
+              <div className="absolute top-3 left-3">
+                <Tag value={row.condition || "attention"} />
+              </div>
+
+              <button
+                className="absolute top-3 right-3 text-xs w-8 h-8 inline-flex items-center justify-center rounded-md border text-red-700 bg-white/90 hover:bg-red-50"
+                onClick={() => deleteDefect(row.id, !!row.manual)}
+                title="Delete"
+                aria-label="Delete"
+                type="button"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs font-medium text-gray-600">Area</span>
+                  <input
+                    className="mt-1 w-full border rounded-lg p-2 bg-white text-gray-900"
+                    value={row.area || ""}
+                    onChange={(e) => updateDefect(row.id, { area: e.target.value })}
+                    placeholder="Area"
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="text-xs font-medium text-gray-600">Condition</span>
+                  <select
+                    className="mt-1 w-full border rounded-lg p-2 bg-white text-gray-900"
+                    value={row.condition || "attention"}
+                    onChange={(e) => updateDefect(row.id, { condition: e.target.value })}
+                  >
+                    <option value="fire_hazard">Fire hazard</option>
+                    <option value="trip_fall">Trip / fall</option>
+                    <option value="rust">Rust</option>
+                    <option value="attention">Attention</option>
+                    <option value="none">Satisfactory</option>
+                  </select>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <label className="block">
+                  <span className="text-xs font-medium text-gray-600">Assigned</span>
+                  <input
+                    className="mt-1 w-full border rounded-lg p-2 bg-white text-gray-900"
+                    value={row.assignedTo || ""}
+                    onChange={(e) => updateDefect(row.id, { assignedTo: e.target.value })}
+                    placeholder="Name"
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium text-gray-600">Deadline</span>
+                  <input
+                    type="date"
+                    className="mt-1 w-full border rounded-lg p-2 bg-white text-gray-900"
+                    value={row.deadline || ""}
+                    onChange={(e) => updateDefect(row.id, { deadline: e.target.value })}
+                  />
+                </label>
+              </div>
+
+              <div>
+                <div className="text-xs font-medium text-gray-600 mb-1">Recommendations</div>
+                {row.manual ? (
+                  <textarea
+                    className="w-full border rounded-lg p-2 bg-white text-gray-900 min-h-[84px]"
+                    value={row.combined || ""}
+                    onChange={(e) => updateDefect(row.id, { combined: e.target.value })}
+                    placeholder="Recommendations"
+                  />
                 ) : (
-                  hazardRowsDerived.map((row, i) => (
-                    <tr key={row.id} className="border-b align-top">
-                      <td className="px-2 py-2 text-gray-500">{i + 1}</td>
-
-                      <td className="px-2 py-2">
-                        <input
-                          className="w-full border rounded-md px-2 py-1 bg-white text-gray-900 placeholder-gray-400"
-                          value={row.area || ""}
-                          onChange={(e) => updateDefect(row.id, { area: e.target.value })}
-                          placeholder="Area"
-                        />
-                      </td>
-
-                      <td className="px-2 py-2">
-                        {row.photoId ? (
-                          <button
-                            type="button"
-                            className="w-20 h-14 rounded-md border bg-gray-50 overflow-hidden p-0 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            onClick={() => {
-                              const found = perImage.find((x) => x.id === row.photoId);
-                              if (found) setSelectedPhoto(found);
-                            }}
-                            title="View photo"
-                          >
-                            <img
-                              src={imgURL(row.photoId)}
-                              alt={row.photoId}
-                              className="w-full h-full object-cover"
-                              crossOrigin="anonymous"
-                              onError={(e) => {
-                                e.currentTarget.src = "/placeholder.png";
-                                e.currentTarget.onerror = null;
-                              }}
-                            />
-                          </button>
-                        ) : (
-                          <span className="text-xs text-gray-400">—</span>
-                        )}
-                      </td>
-
-                      <td className="px-2 py-2">
-                        <select
-                          className="w-full border rounded-md px-2 py-1.5 bg-white text-gray-900"
-                          value={row.condition || "attention"}
-                          onChange={(e) => updateDefect(row.id, { condition: e.target.value })}
-                        >
-                          <option value="fire_hazard">Fire hazard</option>
-                          <option value="trip_fall">Trip / fall</option>
-                          <option value="rust">Rust</option>
-                          <option value="attention">Attention</option>
-                          <option value="none">Satisfactory</option>
-                        </select>
-                      </td>
-
-                      <td className="px-2 py-2">
-                        <input
-                          className="w-full border rounded-md px-2 py-1.5 bg-white text-gray-900 placeholder-gray-400"
-                          value={row.assignedTo || ""}
-                          onChange={(e) => updateDefect(row.id, { assignedTo: e.target.value })}
-                          placeholder="Name"
-                        />
-                      </td>
-
-                      <td className="px-2 py-2">
-                        <input
-                          type="date"
-                          className="w-full border rounded-md px-2 py-1.5 bg-white text-gray-900"
-                          value={row.deadline || ""}
-                          onChange={(e) => updateDefect(row.id, { deadline: e.target.value })}
-                        />
-                      </td>
-
-                      <td className="px-2 py-2 text-gray-800">
-                        {row.manual ? (
-                          <textarea
-                            className="w-full border rounded-md px-2 py-1.5 bg-white text-gray-900 placeholder-gray-400 min-h-[44px] max-h-[90px] overflow-auto"
-                            value={row.combined || ""}
-                            onChange={(e) => updateDefect(row.id, { combined: e.target.value })}
-                            placeholder="Recommendations"
-                          />
-                        ) : (
-                          <div className="leading-snug whitespace-pre-wrap line-clamp-3">
-                            {row.recommendations ? row.recommendations : "—"}
-                          </div>
-                        )}
-                      </td>
-
-                      <td className="px-2 py-2">
-                        <button
-                          className="text-xs w-8 h-8 inline-flex items-center justify-center rounded-md border text-red-700 hover:bg-red-50"
-                          onClick={() => deleteDefect(row.id, !!row.manual)}
-                          title="Delete"
-                          aria-label="Delete"
-                        >
-                          ×
-                        </button>
-                      </td>
-                    </tr>
-                  ))
+                  <div className="text-sm text-gray-800 whitespace-pre-wrap">
+                    {row.recommendations ? row.recommendations : "—"}
+                  </div>
                 )}
-              </tbody>
-            </table>
+              </div>
+            </div>
           </div>
+        );
+      })}
+    </div>
+  )}
 
           <p className="mt-2 text-[11px] text-gray-500">
             Tip: click a photo thumbnail to preview. Comments remain available in the photo modal.
@@ -1182,8 +1257,21 @@ export default function Summary({ model = "openai" }) {
                 }}
               />
               <div className="mt-3 text-sm text-gray-700">
-                <div><b>Location:</b> {selectedPhoto.location || "—"}</div>
-                <div><b>Condition:</b> {conditionLabel(selectedPhoto.condition)}</div>
+                 <div className="mt-2">
+                   <div className="text-xs font-medium text-gray-600 mb-1">Location</div>
+                   <input
+                     className="w-full border rounded-lg p-2 bg-white text-gray-900"
+                     defaultValue={selectedPhoto.location || ""}
+                     placeholder="Add location for this photo"
+                     onBlur={(e) => {
+                       const newLoc = e.target.value;
+                       const idx = perImage.findIndex((x) => x.id === selectedPhoto.id);
+                       if (idx >= 0) persistRow(idx, { location: newLoc });
+                       setSelectedPhoto((p) => ({ ...p, location: newLoc }));
+                     }}
+                   />
+                 </div>
+                <div><b>Condition:</b> {conditionLabel(resolveEffectiveCondition(selectedPhoto))}</div>
                 {selectedPhoto.comment ? <div className="mt-2 whitespace-pre-wrap"><b>Comment:</b> {selectedPhoto.comment}</div> : null}
               </div>
             </div>
@@ -1240,3 +1328,4 @@ export default function Summary({ model = "openai" }) {
     </div>
   );
 }
+

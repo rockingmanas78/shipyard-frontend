@@ -1,7 +1,7 @@
 import React, { forwardRef } from "react";
 
-const IMAGE_HEIGHT = 160; // reduce image size in PDF
-const IMAGES_PER_PAGE = 6; // 2 columns x 3 rows
+const IMAGE_HEIGHT = 240; // reduce image size in PDF
+const IMAGES_PER_PAGE = 4; // 2 columns x 3 rows
 
 function chunk(arr, size) {
   const out = [];
@@ -28,6 +28,65 @@ const PrintReport = forwardRef(function PrintReport(
   ref
 ) {
   const safe = (v) => (v ?? "").toString().trim() || "—";
+  const getNormalizedCondition = (item) =>
+    ((item?.condition ?? item?.condition_type ?? "none") + "").toString();
+
+  const getNormalizedComment = (item) =>
+    ((item?.comment ?? item?.comments ?? "") + "").toString();
+
+  const getNormalizedRecommendationsArray = (item) => {
+    // Prefer your existing field; fallback to OpenAI native `recommendations`
+    if (Array.isArray(item?.recommendations_high_severity_only)) return item.recommendations_high_severity_only;
+    if (Array.isArray(item?.recommendations)) return item.recommendations;
+    // If something stored as a string (user edits), split it safely
+    if (typeof item?.recommendations_high_severity_only === "string") {
+      return item.recommendations_high_severity_only
+        .split(";")
+        .map((s) => s.trim())
+        .filter(Boolean);
+    }
+    return [];
+  };
+
+  const resolveEffectiveCondition = (perImageItem) => {
+    const rawCondition = getNormalizedCondition(perImageItem);
+    if (rawCondition !== "none") return rawCondition;
+
+    const tagsObject = perImageItem?.tags || {};
+    const hasRustStainsTag = Boolean(tagsObject?.rust_stains);
+
+    const recommendationsHighSeverityOnly = getNormalizedRecommendationsArray(perImageItem);
+    const hasHighSeverityRecommendations = recommendationsHighSeverityOnly.length > 0;
+
+    const hasAnyRecommendations = hasHighSeverityRecommendations;
+
+    const severityLevel = ((perImageItem?.severity_level ?? perImageItem?.severity ?? "") + "").toLowerCase();
+    const priorityLevel = ((perImageItem?.priority ?? "") + "").toLowerCase();
+    const isHighOrExtremeSeverity = severityLevel === "high" || severityLevel === "extreme";
+    const isImmediateOrCriticalPriority =
+      priorityLevel === "immediate action required" || priorityLevel === "critical";
+
+    if (hasRustStainsTag) return "rust";
+    if (hasHighSeverityRecommendations || hasAnyRecommendations || isHighOrExtremeSeverity || isImmediateOrCriticalPriority) return "attention";
+    return "none";
+  };
+
+    const derivedCounts = (() => {
+    const perImageList = Array.isArray(perImage) ? perImage : [];
+    let fireHazardCount = 0;
+    let tripFallCount = 0;
+    let satisfactoryCount = 0;
+    for (const item of perImageList) {
+      const effectiveCondition = resolveEffectiveCondition(item);
+      if (effectiveCondition === "fire_hazard") fireHazardCount += 1;
+      else if (effectiveCondition === "trip_fall") tripFallCount += 1;
+      else if (effectiveCondition === "none") satisfactoryCount += 1;
+      // rust/attention are intentionally not part of the main 3 KPI boxes (you can add later if needed)
+    }
+    return { fireHazardCount, tripFallCount, satisfactoryCount };
+  })();
+
+
 
   const conditionLabel = (value) => {
     const map = {
@@ -57,6 +116,10 @@ const PrintReport = forwardRef(function PrintReport(
           .print-root { width: 100% !important; }
           .no-break { break-inside: avoid; page-break-inside: avoid; }
           h1, h2, h3, p, table, tr, td, th, img { break-inside: avoid; page-break-inside: avoid; }
+          h1, h2, h3, img { break-inside: avoid; page-break-inside: avoid; }
+          table { break-inside: auto; page-break-inside: auto; }
+          .wrap { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+          tr { break-inside: avoid; page-break-inside: avoid; }
           img { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
         }
 
@@ -130,6 +193,21 @@ const PrintReport = forwardRef(function PrintReport(
           border: 1px solid #E5E7EB;
           display: block;
         }
+        .defGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+        .defCard { border: 1px solid #E5E7EB; border-radius: 12px; padding: 10px; background: #FFFFFF; }
+        .defHdr { display: flex; gap: 10px; align-items: flex-start; }
+        .defMeta { font-size: 11px; color: #334155; line-height: 1.35; }
+        .defRec { margin-top: 8px; font-size: 11px; color: #374151; line-height: 1.35; }
+        .defImg {
+          width: 100%;
+          height: ${IMAGE_HEIGHT}px;
+          object-fit: contain;
+          background: #F8FAFC;
+          border-radius: 10px;
+          border: 1px solid #E5E7EB;
+          display: block;
+        }
+
       `}</style>
 
       {/* PAGE 1 */}
@@ -162,15 +240,15 @@ const PrintReport = forwardRef(function PrintReport(
         <div className="kpiGrid no-break">
           <div className="kpiBox kpiFire">
             <div className="kpiLabel">Fire hazards</div>
-            <div className="kpiValue">{counts?.fire_hazard_count ?? 0}</div>
+            <div className="kpiValue">{derivedCounts.fireHazardCount}</div>
           </div>
           <div className="kpiBox kpiTrip">
             <div className="kpiLabel">Trip / fall</div>
-            <div className="kpiValue">{counts?.trip_fall_count ?? 0}</div>
+            <div className="kpiValue">{derivedCounts.tripFallCount}</div>
           </div>
           <div className="kpiBox kpiOk">
             <div className="kpiLabel">Satisfactory</div>
-            <div className="kpiValue">{counts?.none_count ?? 0}</div>
+            <div className="kpiValue">{derivedCounts.satisfactoryCount}</div>
           </div>
         </div>
 
@@ -231,82 +309,122 @@ const PrintReport = forwardRef(function PrintReport(
 
         <div style={{ marginTop: 8 }} className="no-break">
           <div className="secTitle">Defects & Non-conformities</div>
-          <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 8, fontSize: 12 }}>
-            <thead>
-              <tr>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #E5E7EB", padding: 8 }}>#</th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #E5E7EB", padding: 8 }}>Area</th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #E5E7EB", padding: 8 }}>Photo</th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #E5E7EB", padding: 8 }}>Condition</th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #E5E7EB", padding: 8 }}>Assigned</th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #E5E7EB", padding: 8 }}>Deadline</th>
-                <th style={{ textAlign: "left", borderBottom: "1px solid #E5E7EB", padding: 8 }}>Recommendations</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(hazardRowsDerived || []).length === 0 ? (
-                <tr>
-                  <td colSpan={7} style={{ padding: 12, color: "#6B7280" }}>No defects.</td>
-                </tr>
-              ) : (
-                hazardRowsDerived.map((row, i) => {
+            {(hazardRowsDerived || []).length === 0 ? (
+              <div style={{ marginTop: 8, fontSize: 12, color: "#6B7280" }}>No defects.</div>
+            ) : (
+              <div className="defGrid" style={{ marginTop: 8 }}>
+                {hazardRowsDerived.map((row, i) => {
                   const pid = row.photoId || row.rawId || row.id;
                   const src = imgURL && pid ? imgURL(pid) : "";
-
-                  // ONLY recommendations (never comments). If manual rows only have `combined`, extract only the recommendation line.
+          
                   const combinedLines = (row.combined || "")
                     .split("\n")
                     .map((s) => s.trim())
                     .filter(Boolean);
-
+          
                   const recFromCombined = row.manual
                     ? (
                         combinedLines
                           .find((s) => /^(recs|recommendation|recommendations)\s*:/i.test(s))
-                          ?.replace(/^(recs|recommendation|recommendations)\s*:\s*/i, "") ||
-                        ""
+                          ?.replace(/^(recs|recommendation|recommendations)\s*:\s*/i, "") || ""
                       )
                     : "";
-
+          
                   const rec = (row.recommendations || recFromCombined || "").toString().trim() || "—";
-
+          
                   return (
-                    <tr key={row.id || pid || i}>
-                      <td style={{ borderBottom: "1px solid #F3F4F6", padding: 8 }}>{i + 1}</td>
-                      <td style={{ borderBottom: "1px solid #F3F4F6", padding: 8 }}>{row.area || "—"}</td>
-                      <td style={{ borderBottom: "1px solid #F3F4F6", padding: 8 }}>
-                        {src ? (
-                          <img
-                            src={src}
-                            alt={pid}
-                            className="thumb"
-                            loading="eager"
-                            crossOrigin="anonymous"
-                            referrerPolicy="no-referrer"
-                            onError={(e) => {
-                              e.currentTarget.style.display = "none";
-                            }}
-                          />
-                        ) : (
-                          <span style={{ color: "#94A3B8" }}>—</span>
-                        )}
-                      </td>
-                      <td style={{ borderBottom: "1px solid #F3F4F6", padding: 8 }}>{conditionLabel(row.condition)}</td>
-                      <td style={{ borderBottom: "1px solid #F3F4F6", padding: 8 }}>{row.assignedTo || "—"}</td>
-                      <td style={{ borderBottom: "1px solid #F3F4F6", padding: 8 }}>{row.deadline || "—"}</td>
-                      <td style={{ borderBottom: "1px solid #F3F4F6", padding: 8, whiteSpace: "pre-wrap" }}>{rec}</td>
-                    </tr>
+                    <div key={row.id || pid || i} className="defCard">
+                    {src ? (
+                      <img
+                        src={src}
+                        alt={pid}
+                        className="defImg"
+                        loading="eager"
+                        crossOrigin="anonymous"
+                        referrerPolicy="no-referrer"
+                        onError={(e) => { e.currentTarget.style.display = "none"; }}
+                      />
+                    ) : null}
+
+                    <div className="defMeta" style={{ marginTop: 8 }}>
+                      <div><b>#{i + 1}</b> · <b>{conditionLabel(row.condition)}</b></div>
+                      <div><b>Area:</b> {row.area || "—"}</div>
+                      <div><b>Assigned:</b> {row.assignedTo || "—"} · <b>Deadline:</b> {row.deadline || "—"}</div>
+                    </div>
+                      <div className="defRec wrap"><b>Recommendations:</b> {rec}</div>
+                    </div>
                   );
-                })
-              )}
-            </tbody>
-          </table>
+                })}
+              </div>
+            )}
         </div>
 
         <hr className="rule" />
 
         {/* Close PAGE 1 content */}
       </div>
+
+            {/* LOCATION-WISE PHOTO FINDINGS (GROUPED) */}
+      {(() => {
+        const list = Array.isArray(perImage) ? perImage : [];
+        const grouped = {};
+        for (const it of list) {
+          const loc = (it.location || "").toString().trim() || "Unspecified area";
+          (grouped[loc] = grouped[loc] || []).push(it);
+        }
+        const entries = Object.entries(grouped).sort((a, b) => a[0].localeCompare(b[0]));
+
+        // If user hasn't entered any location at all, still show 1 group ("Unspecified area")
+        if (!entries.length) return null;
+
+        return entries.flatMap(([loc, items]) => {
+          const pages = chunk(items, IMAGES_PER_PAGE);
+          return pages.map((pageItems, pageIdx) => (
+            <div key={`loc-${loc}-${pageIdx}`} className="print-page page-pad">
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 12 }}>
+                <div>
+                  <div style={{ fontSize: 18, fontWeight: 800 }}>Location-wise Photo Findings</div>
+                  <div style={{ marginTop: 4, fontSize: 12 }} className="muted">
+                    <b>Area:</b> {loc} {pages.length > 1 ? `· Part ${pageIdx + 1} of ${pages.length}` : ""}
+                  </div>
+                </div>
+                <div style={{ fontSize: 12 }} className="muted">
+                  {safe(meta?.vesselName)} · {safe(meta?.date)} · {safe(meta?.location)}
+                </div>
+              </div>
+
+              <hr className="rule" />
+
+              <div className="imgGrid">
+                {pageItems.map((it) => (
+                  <div key={it.id} className="imgCard no-break">
+                    <div style={{ fontSize: 11, color: "#374151", marginBottom: 6 }}>
+                      <b>Condition:</b> {conditionLabel(resolveEffectiveCondition(it))}
+                      {it.severity_level ? <> · <b>Severity:</b> {it.severity_level}</> : null}
+                      {it.priority ? <> · <b>Priority:</b> {it.priority}</> : null}
+                    </div>
+                    <img
+                      src={imgURL ? imgURL(it.id) : ""}
+                      alt={it.id}
+                      className="img"
+                      crossOrigin="anonymous"
+                      loading="eager"
+                      referrerPolicy="no-referrer"
+                      onError={(e) => { e.currentTarget.style.display = "none"; }}
+                    />
+                    {it.comment ? (
+                      <div style={{ marginTop: 6, fontSize: 11, whiteSpace: "pre-wrap", color: "#374151" }}>
+                        <b>Impact / Notes:</b> {it.comment}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ));
+        });
+      })()}
+
 
       {/* PHOTO APPENDIX (PAGINATED) */}
       {photoPages.length ? (
@@ -330,7 +448,7 @@ const PrintReport = forwardRef(function PrintReport(
               {pageItems.map((it) => (
                 <div key={it.id} className="imgCard no-break">
                   <div style={{ fontSize: 11, color: "#374151", marginBottom: 6 }}>
-                    <b>Location:</b> {it.location || "—"} · <b>Condition:</b> {conditionLabel(it.condition)}
+                    <b>Location:</b> {it.location || "—"} · <b>Condition:</b> {conditionLabel(resolveEffectiveCondition(it))}
                   </div>
                   <img
                     src={imgURL ? imgURL(it.id) : ""}
@@ -367,3 +485,76 @@ const PrintReport = forwardRef(function PrintReport(
 PrintReport.displayName = "PrintReport";
 
 export default PrintReport;
+
+/**
+ *           // <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 8, fontSize: 12 }}>
+          //   <thead>
+          //     <tr>
+          //       <th style={{ textAlign: "left", borderBottom: "1px solid #E5E7EB", padding: 8 }}>#</th>
+          //       <th style={{ textAlign: "left", borderBottom: "1px solid #E5E7EB", padding: 8 }}>Area</th>
+          //       <th style={{ textAlign: "left", borderBottom: "1px solid #E5E7EB", padding: 8 }}>Photo</th>
+          //       <th style={{ textAlign: "left", borderBottom: "1px solid #E5E7EB", padding: 8 }}>Condition</th>
+          //       <th style={{ textAlign: "left", borderBottom: "1px solid #E5E7EB", padding: 8 }}>Assigned</th>
+          //       <th style={{ textAlign: "left", borderBottom: "1px solid #E5E7EB", padding: 8 }}>Deadline</th>
+          //       <th style={{ textAlign: "left", borderBottom: "1px solid #E5E7EB", padding: 8 }}>Recommendations</th>
+          //     </tr>
+          //   </thead>
+          //   <tbody>
+          //     {(hazardRowsDerived || []).length === 0 ? (
+          //       <tr>
+          //         <td colSpan={7} style={{ padding: 12, color: "#6B7280" }}>No defects.</td>
+          //       </tr>
+          //     ) : (
+          //       hazardRowsDerived.map((row, i) => {
+          //         const pid = row.photoId || row.rawId || row.id;
+          //         const src = imgURL && pid ? imgURL(pid) : "";
+
+          //         // ONLY recommendations (never comments). If manual rows only have `combined`, extract only the recommendation line.
+          //         const combinedLines = (row.combined || "")
+          //           .split("\n")
+          //           .map((s) => s.trim())
+          //           .filter(Boolean);
+
+          //         const recFromCombined = row.manual
+          //           ? (
+          //               combinedLines
+          //                 .find((s) => /^(recs|recommendation|recommendations)\s*:/i.test(s))
+          //                 ?.replace(/^(recs|recommendation|recommendations)\s*:\s*i, "") ||
+          //               ""
+          //             )
+          //           : "";
+
+          //         const rec = (row.recommendations || recFromCombined || "").toString().trim() || "—";
+
+          //         return (
+          //           <tr key={row.id || pid || i}>
+          //             <td style={{ borderBottom: "1px solid #F3F4F6", padding: 8 }}>{i + 1}</td>
+          //             <td style={{ borderBottom: "1px solid #F3F4F6", padding: 8 }}>{row.area || "—"}</td>
+          //             <td style={{ borderBottom: "1px solid #F3F4F6", padding: 8 }}>
+          //               {src ? (
+          //                 <img
+          //                   src={src}
+          //                   alt={pid}
+          //                   className="thumb"
+          //                   loading="eager"
+          //                   crossOrigin="anonymous"
+          //                   referrerPolicy="no-referrer"
+          //                   onError={(e) => {
+          //                     e.currentTarget.style.display = "none";
+          //                   }}
+          //                 />
+          //               ) : (
+          //                 <span style={{ color: "#94A3B8" }}>—</span>
+          //               )}
+          //             </td>
+          //             <td style={{ borderBottom: "1px solid #F3F4F6", padding: 8 }}>{conditionLabel(row.condition)}</td>
+          //             <td style={{ borderBottom: "1px solid #F3F4F6", padding: 8 }}>{row.assignedTo || "—"}</td>
+          //             <td style={{ borderBottom: "1px solid #F3F4F6", padding: 8 }}>{row.deadline || "—"}</td>
+          //             <td style={{ borderBottom: "1px solid #F3F4F6", padding: 8, whiteSpace: "pre-wrap" }}>{rec}</td>
+          //           </tr>
+          //         );
+          //       })
+          //     )}
+          //   </tbody>
+          // </table>
+ */
